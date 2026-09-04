@@ -17,6 +17,8 @@ add_library(core STATIC
     DMA.cpp
     DMA_Timings.h
     DMA_Timings.cpp
+    MCPDebug.h
+    MCPDebug.cpp
     DSi.cpp
     DSi_AES.cpp
     DSi_Camera.cpp

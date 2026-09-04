@@ -28,6 +28,7 @@
 #include "Platform.h"
 #include "GPU.h"
 #include "ARMJIT_Memory.h"
+#include "MCPDebug.h"
 
 namespace melonDS
 {
@@ -662,6 +663,10 @@ void ARMv5::Execute()
                 if constexpr (mode == CPUExecuteMode::InterpreterGDB)
                     GdbCheckC();
 
+                // MCP 调试钩子：断点/单步/指令追踪（禁用时仅一次分支判断）
+                if (MCPDebug::AnyHooksActive() && MCPDebug::InstructionHook(this))
+                    break;
+
                 // prefetch
                 R[15] += 2;
                 CurInstr = NextInstr[0];
@@ -677,6 +682,10 @@ void ARMv5::Execute()
             {
                 if constexpr (mode == CPUExecuteMode::InterpreterGDB)
                     GdbCheckC();
+
+                // MCP 调试钩子：断点/单步/指令追踪（禁用时仅一次分支判断）
+                if (MCPDebug::AnyHooksActive() && MCPDebug::InstructionHook(this))
+                    break;
 
                 // prefetch
                 R[15] += 4;
@@ -801,6 +810,10 @@ void ARMv4::Execute()
                 if constexpr (mode == CPUExecuteMode::InterpreterGDB)
                     GdbCheckC();
 
+                // MCP 调试钩子：断点/单步/指令追踪（禁用时仅一次分支判断）
+                if (MCPDebug::AnyHooksActive() && MCPDebug::InstructionHook(this))
+                    break;
+
                 // prefetch
                 R[15] += 2;
                 CurInstr = NextInstr[0];
@@ -815,6 +828,10 @@ void ARMv4::Execute()
             {
                 if constexpr (mode == CPUExecuteMode::InterpreterGDB)
                     GdbCheckC();
+
+                // MCP 调试钩子：断点/单步/指令追踪（禁用时仅一次分支判断）
+                if (MCPDebug::AnyHooksActive() && MCPDebug::InstructionHook(this))
+                    break;
 
                 // prefetch
                 R[15] += 4;
@@ -1121,6 +1138,7 @@ u32 ARMv5::ReadMem(u32 addr, int size)
 
 void ARMv4::DataRead8(u32 addr, u32* val)
 {
+    if (MCPDebug::DataHooksActive()) MCPDebug::DataReadHook(this, addr, 1);
     *val = BusRead8(addr);
     DataRegion = addr;
     DataCycles = NDS.ARM7MemTimings[addr >> 15][0];
@@ -1128,6 +1146,7 @@ void ARMv4::DataRead8(u32 addr, u32* val)
 
 void ARMv4::DataRead16(u32 addr, u32* val)
 {
+    if (MCPDebug::DataHooksActive()) MCPDebug::DataReadHook(this, addr & ~1u, 2);
     addr &= ~1;
 
     *val = BusRead16(addr);
@@ -1137,6 +1156,7 @@ void ARMv4::DataRead16(u32 addr, u32* val)
 
 void ARMv4::DataRead32(u32 addr, u32* val)
 {
+    if (MCPDebug::DataHooksActive()) MCPDebug::DataReadHook(this, addr & ~3u, 4);
     addr &= ~3;
 
     *val = BusRead32(addr);
@@ -1154,6 +1174,7 @@ void ARMv4::DataRead32S(u32 addr, u32* val)
 
 void ARMv4::DataWrite8(u32 addr, u8 val)
 {
+    if (MCPDebug::DataHooksActive()) MCPDebug::DataWriteHook(this, addr, val, 1);
     BusWrite8(addr, val);
     DataRegion = addr;
     DataCycles = NDS.ARM7MemTimings[addr >> 15][0];
@@ -1161,6 +1182,7 @@ void ARMv4::DataWrite8(u32 addr, u8 val)
 
 void ARMv4::DataWrite16(u32 addr, u16 val)
 {
+    if (MCPDebug::DataHooksActive()) MCPDebug::DataWriteHook(this, addr & ~1u, val, 2);
     addr &= ~1;
 
     BusWrite16(addr, val);
@@ -1170,6 +1192,7 @@ void ARMv4::DataWrite16(u32 addr, u16 val)
 
 void ARMv4::DataWrite32(u32 addr, u32 val)
 {
+    if (MCPDebug::DataHooksActive()) MCPDebug::DataWriteHook(this, addr & ~3u, val, 4);
     addr &= ~3;
 
     BusWrite32(addr, val);

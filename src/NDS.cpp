@@ -38,6 +38,7 @@
 #include "version.h"
 
 #include "DSi.h"
+#include "MCPDebug.h"
 #include "DSi_SPI_TSC.h"
 #include "DSi_NWifi.h"
 #include "DSi_Camera.h"
@@ -935,6 +936,10 @@ u32 NDS::RunFrame()
     bool runFrame = Running && !(CPUStop & CPUStop_Sleep);
     while (Running)
     {
+        // MCP 调试：断点/观察点/单步命中后冻结模拟器，等待 AckBreak
+        if (MCPDebug::GetBreakInfo().Hit)
+            break;
+
         u64 frametarget = SysTimestamp + 560190;
 
         if (CPUStop & CPUStop_Sleep)
@@ -977,7 +982,7 @@ u32 NDS::RunFrame()
             }
             CPUStop &= ~CPUStop_Wakeup;
 
-            while (Running && GPU.TotalScanlines==0)
+            while (Running && GPU.TotalScanlines==0 && !MCPDebug::GetBreakInfo().Hit)
             {
                 u64 target = NextTarget();
                 ARM9Target = target << ARM9ClockShift;

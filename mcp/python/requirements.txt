@@ -1,0 +1,4 @@
+mcp>=1.26.0,<2
+Pillow>=10.0
+psutil>=5.9
+capstone>=5.0
