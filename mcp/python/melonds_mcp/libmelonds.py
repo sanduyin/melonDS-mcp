@@ -1,6 +1,6 @@
 """libmelonds_mcp 的 ctypes 绑定层。
 
-加载 libmelonds_mcp.dylib/.so 并声明全部 C API 签名。
+加载 melonds_mcp.dll / libmelonds_mcp.dylib / .so 并声明全部 C API 签名。
 库路径查找顺序：
 1. 环境变量 MELONDS_MCP_LIB
 2. 仓库根目录 build/ 下
@@ -27,18 +27,20 @@ def _candidate_paths() -> list[Path]:
     repo_root = here.parents[3]
     build_dir = repo_root / "build"
 
-    if sys.platform == "darwin":
-        candidates.append(build_dir / "libmelonds_mcp.dylib")
-    candidates.append(build_dir / "libmelonds_mcp.so")
-    candidates.append(Path("libmelonds_mcp.dylib"))
-    candidates.append(Path("libmelonds_mcp.so"))
+    names = (["melonds_mcp.dll", "libmelonds_mcp.dll"] if sys.platform == "win32"
+             else ["libmelonds_mcp.dylib"] if sys.platform == "darwin"
+             else ["libmelonds_mcp.so"])
+    for directory in (build_dir / "mcp-direct", build_dir / "mcp-direct" / "Release",
+                      build_dir / "mcp", build_dir / "mcp" / "Release",
+                      build_dir, build_dir / "Release"):
+        candidates.extend(directory / name for name in names)
     return candidates
 
 
 def find_library() -> Path:
     for p in _candidate_paths():
-        if p.exists():
-            return p
+        if p.is_file():
+            return p.resolve()
     raise FileNotFoundError(
         "找不到 libmelonds_mcp 库。请先运行 mcp/scripts/build.sh，"
         "或通过环境变量 MELONDS_MCP_LIB 指定路径。"
@@ -50,6 +52,8 @@ class LibMelonDS:
 
     def __init__(self, libpath: Path | None = None):
         self.path = libpath or find_library()
+        self._dll_directory = (os.add_dll_directory(str(self.path.resolve().parent))
+                               if sys.platform == "win32" else None)
         self.lib = ctypes.CDLL(str(self.path))
         self._declare()
 
@@ -70,6 +74,13 @@ class LibMelonDS:
         # ── 显示 ──
         lib.melonds_screenshot.argtypes = [ctypes.c_char_p]
         lib.melonds_screenshot.restype = None
+
+        # Direct copies from physical GPU storage, without CPU MMIO access.
+        lib.melonds_gpu_read.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint32,
+                                        ctypes.POINTER(ctypes.c_ubyte), ctypes.c_uint32]
+        lib.melonds_gpu_read.restype = ctypes.c_uint32
+        lib.melonds_gpu_state.argtypes = [ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint32]
+        lib.melonds_gpu_state.restype = ctypes.c_int
 
         # ── 输入 ──
         lib.melonds_input_keypad_update.argtypes = [ctypes.c_ushort]
@@ -104,6 +115,22 @@ class LibMelonDS:
         lib.melonds_memory_read32.restype = u32
         lib.melonds_memory_read_block.argtypes = [ctypes.c_int, u32, ctypes.c_int, ctypes.c_char_p]
         lib.melonds_memory_read_block.restype = ctypes.c_int
+        # Optional for compatibility with builds predating the safe debug view.
+        peek = getattr(lib, "melonds_memory_peek_block", None)
+        if peek is not None:
+            peek.argtypes = [ctypes.c_int, ctypes.c_uint32, ctypes.c_uint32,
+                             ctypes.POINTER(ctypes.c_ubyte)]
+            peek.restype = ctypes.c_uint32
+        code_peek = getattr(lib, "melonds_code_peek_block", None)
+        if code_peek is not None:
+            code_peek.argtypes = [ctypes.c_int, ctypes.c_uint32, ctypes.c_uint32,
+                                  ctypes.POINTER(ctypes.c_ubyte)]
+            code_peek.restype = ctypes.c_uint32
+        poke = getattr(lib, "melonds_memory_poke_block", None)
+        if poke is not None:
+            poke.argtypes = [ctypes.c_int, ctypes.c_uint32, ctypes.c_uint32,
+                             ctypes.POINTER(ctypes.c_ubyte), ctypes.c_int]
+            poke.restype = ctypes.c_uint32
         lib.melonds_memory_write8.argtypes = [ctypes.c_int, u32, ctypes.c_ubyte]
         lib.melonds_memory_write8.restype = None
         lib.melonds_memory_write16.argtypes = [ctypes.c_int, u32, ctypes.c_ushort]
@@ -238,6 +265,74 @@ class LibMelonDS:
         buf = ctypes.create_string_buffer(size)
         n = self.lib.melonds_memory_read_block(cpu, address, size, buf)
         return buf.raw[:n]
+
+    def peek_block(self, cpu: int, address: int, size: int) -> bytes:
+        """Side-effect-free DS CPU data view, not instruction cache contents.
+
+        Native code validates the currently mapped RAM/WRAM/TCM/BIOS region.
+        Never fall back to the legacy bus read when this API is unavailable or
+        refuses a range; such a fallback could acknowledge interrupts or FIFOs.
+        The caller must hold the same emulator lock as other native operations.
+        """
+        return self._debug_peek(cpu, address, size, instruction=False)
+
+    @staticmethod
+    def _debug_range(cpu: int, address: int, size: int) -> None:
+        if type(cpu) is not int or cpu not in (0, 1):
+            raise ValueError("cpu must be 0 (ARM9) or 1 (ARM7)")
+        if type(address) is not int or not 0 <= address <= 0xFFFFFFFF:
+            raise ValueError("address must be a uint32 integer")
+        if type(size) is not int or not 1 <= size <= 4096:
+            raise ValueError("size must be an integer in [1, 4096]")
+        if address + size > 0x100000000:
+            raise ValueError("debug range exceeds the 32-bit address space")
+
+    def code_peek_block(self, cpu: int, address: int, size: int) -> bytes:
+        """Instruction backing bytes: ARM9 ITCM overlay but no DTCM overlay.
+
+        This does not read the emulated I-cache or prefetched instruction slots.
+        """
+        return self._debug_peek(cpu, address, size, instruction=True)
+
+    def _debug_peek(self, cpu: int, address: int, size: int, *, instruction: bool) -> bytes:
+        self._debug_range(cpu, address, size)
+        symbol = "melonds_code_peek_block" if instruction else "melonds_memory_peek_block"
+        peek = getattr(self.lib, symbol, None)
+        if peek is None:
+            raise RuntimeError(f"native library lacks {symbol}; rebuild the MCP library for safe debug peek")
+        buffer = (ctypes.c_ubyte * size)()
+        copied = peek(cpu, address, size, buffer)
+        if copied != size:
+            raise RuntimeError(
+                f"debug peek refused or returned a short read: cpu={cpu}, address=0x{address:08x}, "
+                f"requested={size}, copied={copied}; only supported DS RAM/WRAM/TCM/BIOS data views are allowed "
+                "(no MMIO/GPU/cart/DSi or cross-region reads)"
+            )
+        return bytes(buffer)
+
+    def poke_block(self, cpu: int, address: int, data: bytes, *, instruction: bool = False) -> int:
+        """Atomically modify a supported DS backing range; no MMIO/bus fallback.
+
+        instruction=False follows the data view and leaves prefetch unchanged.
+        instruction=True follows instruction backing and refreshes affected
+        prefetched bytes/cache state without executing either CPU.
+        """
+        if type(data) is not bytes:
+            raise ValueError("data must be bytes")
+        if type(instruction) is not bool:
+            raise ValueError("instruction must be a boolean")
+        self._debug_range(cpu, address, len(data))
+        poke = getattr(self.lib, "melonds_memory_poke_block", None)
+        if poke is None:
+            raise RuntimeError("native library lacks melonds_memory_poke_block; rebuild the MCP library for safe debug writes")
+        source = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
+        written = poke(cpu, address, len(data), source, int(instruction))
+        if written != len(data):
+            raise RuntimeError(
+                f"debug write refused or returned an invalid length: requested={len(data)}, written={written}; "
+                "only supported DS writable RAM/WRAM/TCM backing ranges are allowed"
+            )
+        return written
 
     def write_block(self, cpu: int, address: int, data: bytes) -> int:
         return self.lib.melonds_memory_write_block(cpu, address, len(data), data)

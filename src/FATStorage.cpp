@@ -17,7 +17,6 @@
 */
 
 #include <string.h>
-#include <dirent.h>
 #include <inttypes.h>
 #include <vector>
 
@@ -30,6 +29,14 @@ namespace melonDS
 namespace fs = std::filesystem;
 using namespace Platform;
 using std::string;
+
+// u8string uses char in C++17 and char8_t in C++20. Platform paths are UTF-8
+// bytes in either case; avoid a locale-dependent path::string() conversion.
+static std::string PathUTF8(const fs::path& path)
+{
+    const auto utf8 = path.u8string();
+    return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+}
 
 FATStorage::FATStorage(const std::string& filename, u64 size, bool readonly, const std::optional<string>& sourcedir) :
     FATStorage(FATStorageArgs { filename, size, readonly, sourcedir })
@@ -433,7 +440,7 @@ bool FATStorage::ExportFile(const std::string& path, fs::path out)
                         err);
     }
 
-    fout = OpenFile(out.u8string(), FileMode::Write);
+    fout = OpenFile(PathUTF8(out), FileMode::Write);
     if (!fout)
     {
         f_close(&file);
@@ -851,7 +858,7 @@ bool FATStorage::ImportFile(const std::string& path, fs::path in)
     FileHandle* fin;
     FRESULT res;
 
-    fin = Platform::OpenFile(in.u8string(), FileMode::Read);
+    fin = Platform::OpenFile(PathUTF8(in), FileMode::Read);
     if (!fin)
         return false;
 
@@ -902,7 +909,7 @@ bool FATStorage::ImportDirectory(const std::string& sourcedir)
     // * files will be added if they aren't in the index, or if the size or last-modified-date don't match
     for (auto& entry : fs::recursive_directory_iterator(fs::u8path(sourcedir)))
     {
-        std::string fullpath = entry.path().u8string();
+        std::string fullpath = PathUTF8(entry.path());
         std::string innerpath = fullpath.substr(srclen);
         if (innerpath[0] == '/' || innerpath[0] == '\\')
             innerpath = innerpath.substr(1);

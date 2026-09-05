@@ -52,6 +52,8 @@ public:
     u32 CurSection;
 
     void Section(const char* magic);
+    // Optional extension sections must not change the current read cursor.
+    bool HasSection(const char* magic) const { return FindSection(magic) != NO_SECTION; }
 
     void Var8(u8* var)
     {

@@ -17,8 +17,6 @@ add_library(core STATIC
     DMA.cpp
     DMA_Timings.h
     DMA_Timings.cpp
-    MCPDebug.h
-    MCPDebug.cpp
     DSi.cpp
     DSi_AES.cpp
     DSi_Camera.cpp
@@ -44,6 +42,8 @@ add_library(core STATIC
     GPU3D_Texcache.cpp
     GPU3D_Texcache.h
     Mic.cpp
+    MCPDebug.cpp
+    MCPDebug.h
     NDS.cpp
     NDSCart.cpp
     Platform.h
@@ -86,6 +86,15 @@ add_library(core STATIC
     xxhash/xxhash.c
 
     blip-buf/blip_buf.c)
+
+# The core already uses C++20 designated initializers. GCC and Clang accept
+# them as an extension in the project's C++17 mode, while MSVC requires the
+# standard mode that defines them.
+if (MSVC)
+    set_property(TARGET core PROPERTY CXX_STANDARD 20)
+    target_compile_options(core PUBLIC /utf-8)
+    target_compile_definitions(core PRIVATE _USE_MATH_DEFINES)
+endif()
 
 if (ENABLE_GDBSTUB)
     message(NOTICE "Enabling GDB stub")
@@ -216,11 +225,6 @@ endif()
 
 if (WIN32)
     target_link_libraries(core PRIVATE ole32 comctl32 wsock32 ws2_32)
-
-    if (NOT MINGW)
-        find_path(DIRENT_INCLUDE_DIRS "dirent.h")
-        target_include_directories(core PUBLIC ${DIRENT_INCLUDE_DIRS})
-    endif()
 elseif(NOT APPLE AND NOT HAIKU)
     check_library_exists(rt shm_open "" NEED_LIBRT)
     if (NEED_LIBRT)

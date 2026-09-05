@@ -585,8 +585,9 @@ public:
 
     void SetPowerCnt(u32 val) noexcept;
 
-    // MCP 扩展：跳过 2D/3D 帧渲染（无头多帧推进提速用）。
-    // 屏幕输出停留在最后一帧已渲染内容；VRAM/寄存器/时序不受影响。
+    // MCP headless fast-forward: skip 2D presentation when no display capture
+    // needs it. Keep device timing and 3D/capture results intact.
+    // Adapted from sanduyin/melonDS-mcp (GPL-3.0).
     bool SkipRender = false;
 
     void StartFrame() noexcept;

@@ -5,6 +5,9 @@ from __future__ import annotations
 import base64
 import io
 import os
+import json
+
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 from .constants import SCREEN_WIDTH, SCREEN_HEIGHT
 from .emulator import EmulatorState, WATCH_TYPES
@@ -53,15 +56,15 @@ def register(mcp, emu: EmulatorState) -> None:
     # ═══════════════ 截图 ═══════════════
 
     @mcp.tool()
-    def screenshot(screen: str = "both", format: str = "png") -> dict:
-        """截取模拟器屏幕，返回 base64 编码图像。
+    def screenshot(screen: str = "both", format: str = "png") -> CallToolResult:
+        """截取最近完成帧：PNG 返回 MCP 图像内容块和帧号元数据。
 
         Args:
             screen: top=上屏 bottom=下屏 both=双屏竖排
             format: png | rgb_hex（后者返回原始字节的 hex，便于精确分析）
         """
         if not HAS_PIL and format == "png":
-            return {"ok": False, "error": "未安装 Pillow（pip install Pillow）"}
+            raise RuntimeError("未安装 Pillow（pip install Pillow）")
 
         raw = emu.lib.screenshot_bytes()
         top = raw[:SCREEN_WIDTH * SCREEN_HEIGHT * 3]
@@ -75,10 +78,12 @@ def register(mcp, emu: EmulatorState) -> None:
                 data = {"bottom": bottom.hex()}
             else:
                 data = {"top": top.hex(), "bottom": bottom.hex()}
-            return {"ok": True, "format": "rgb_hex", "size": {
+            result = {"ok": True, "format": "rgb_hex", "size": {
                 "width": SCREEN_WIDTH,
                 "height": SCREEN_HEIGHT if screen != "both" else SCREEN_HEIGHT * 2,
-            }, "data": data}
+            }, "data": data, "frame_number": emu._frame_count()}
+            return CallToolResult(content=[TextContent(type="text", text=json.dumps(result))],
+                                  structuredContent=result)
 
         if screen == "top":
             img = Image.frombytes("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), top)
@@ -91,9 +96,16 @@ def register(mcp, emu: EmulatorState) -> None:
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        return {"ok": True, "format": "png", "screen": screen,
-                "size": {"width": img.width, "height": img.height},
-                "data_base64": b64}
+        metadata = {"ok": True, "format": "png", "screen": screen,
+                    "size": {"width": img.width, "height": img.height},
+                    "frame_number": emu._frame_count(),
+                    "framebuffer": "last_completed_frame",
+                    "break_hit": emu.lib.break_info()["hit"]}
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(metadata)),
+                     ImageContent(type="image", data=b64, mimeType="image/png")],
+            structuredContent=metadata,
+        )
 
     # ═══════════════ ROM 信息 ═══════════════
 
@@ -161,8 +173,12 @@ def register(mcp, emu: EmulatorState) -> None:
     def get_system_info() -> dict:
         """获取模拟系统信息：库版本、模拟周期计数、JIT 状态、屏幕尺寸。"""
         emu.ensure_init()
+        cycles = lib.melonds_get_cycles(0)
         return {
-            "cycles_arm7": lib.melonds_get_cycles(1),
+            "system_clock_cycles": cycles,
+            "cycles_in_frame": lib.melonds_get_cycles(2),
+            "cycles_arm7": cycles,  # Legacy field, system-clock units, not CPU identity.
+            "cycle_semantics": "system clock; cycles_arm7 is a compatibility alias",
             "jit_enabled": bool(lib.melonds_jit_enabled()),
             "jit_suppressed_for_debug": emu._jit_suppressed,
             "skip_render": bool(lib.melonds_get_skip_render()),

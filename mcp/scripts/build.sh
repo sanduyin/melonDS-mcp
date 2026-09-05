@@ -10,7 +10,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-BUILD_DIR="$REPO_ROOT/build"
+BUILD_DIR="$REPO_ROOT/build/mcp"
 
 echo "=== 构建 libmelonds_mcp ==="
 echo "仓库根目录: $REPO_ROOT"
@@ -21,7 +21,6 @@ cd "$BUILD_DIR"
 
 cmake "$REPO_ROOT/mcp" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DENABLE_JIT=ON \
     -DENABLE_OGLRENDERER=OFF \
     -DENABLE_GDBSTUB=OFF
 
@@ -44,10 +43,9 @@ if [[ "${1:-}" != "--no-python" ]]; then
     echo ""
     echo "=== 检查 Python 依赖 ==="
     PYTHON="${PYTHON:-python3}"
-    if "$PYTHON" -c "import mcp" 2>/dev/null; then
-        echo "Python MCP 依赖已安装"
-    else
-        echo "安装 Python 依赖..."
-        "$PYTHON" -m pip install -r "$REPO_ROOT/mcp/python/requirements.txt"
+    VENV_DIR="$REPO_ROOT/mcp/.venv"
+    if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+        "$PYTHON" -m venv "$VENV_DIR"
     fi
+    "$VENV_DIR/bin/python" -m pip install -r "$REPO_ROOT/mcp/python/requirements.txt"
 fi

@@ -2328,7 +2328,11 @@ void GPU3D::ExecuteCommand() noexcept
                     break;
 
                 default:
+#if defined(_MSC_VER)
+                    __assume(0);
+#else
                     __builtin_unreachable();
+#endif
                 }
             }
         }

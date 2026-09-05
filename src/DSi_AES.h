@@ -26,16 +26,21 @@
 
 namespace melonDS
 {
+#if defined(_MSC_VER)
+#define MELONDS_AES_ALWAYS_INLINE __forceinline
+#else
+#define MELONDS_AES_ALWAYS_INLINE __attribute((always_inline))
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wattributes"
+#endif
 #if defined(__GNUC__) && (__GNUC__ >= 11) && defined(__SIZEOF_INT128__) // gcc 11.*
 // NOTE: Yes, the compiler does *not* recognize this code pattern, so it is indeed an optimization.
-__attribute((always_inline)) static void Bswap128(void* Dst, const void* Src)
+MELONDS_AES_ALWAYS_INLINE static void Bswap128(void* Dst, const void* Src)
 {
     *(__int128*)Dst = __builtin_bswap128(*(__int128*)Src);
 }
 #else
-__attribute((always_inline)) static void Bswap128(void* Dst, const void* Src)
+MELONDS_AES_ALWAYS_INLINE static void Bswap128(void* Dst, const void* Src)
 {
     for (int i = 0; i < 16; ++i)
     {
@@ -43,7 +48,10 @@ __attribute((always_inline)) static void Bswap128(void* Dst, const void* Src)
     }
 }
 #endif
+#if !defined(_MSC_VER)
 #pragma GCC diagnostic pop
+#endif
+#undef MELONDS_AES_ALWAYS_INLINE
 
 class DSi;
 class DSi_AES

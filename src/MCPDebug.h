@@ -9,6 +9,8 @@
     shim 层调用，因此内部无需加锁。
 
     Copyright (C) 2026 melonDS-mcp contributors
+    Adapted from https://github.com/sanduyin/melonDS-mcp
+    (commit 3b39290543904bbafe62ec5c4f208b69172212ec).
     Licensed under GPLv3 (same as melonDS)
 */
 
@@ -155,7 +157,7 @@ u32  DrainWatchEvents(WatchEvent* out, u32 max);
 
 // 命中状态
 BreakInfo GetBreakInfo();
-void AckBreak();                            // 确认命中，清除标志以继续执行
+void AckBreak(); // Clear the hit; let the stopped breakpoint instruction run once.
 
 }
 

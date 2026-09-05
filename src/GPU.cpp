@@ -126,6 +126,7 @@ void GPU::ResetVRAMCache() noexcept
 
 void GPU::Reset() noexcept
 {
+    SkipRender = false;
     ScreensEnabled = false;
     ScreenSwap = false;
 
@@ -551,14 +552,14 @@ void GPU::Write32(u32 addr, u32 val)
 u8* GPU::GetUniqueBankPtr(u32 mask, u32 offset) noexcept
 {
     if (!mask || (mask & (mask - 1)) != 0) return NULL;
-    int num = __builtin_ctz(mask);
+    int num = CountTrailingZeroes(mask);
     return &VRAM[num][offset & VRAMMask[num]];
 }
 
 const u8* GPU::GetUniqueBankPtr(u32 mask, u32 offset) const noexcept
 {
     if (!mask || (mask & (mask - 1)) != 0) return NULL;
-    int num = __builtin_ctz(mask);
+    int num = CountTrailingZeroes(mask);
     return &VRAM[num][offset & VRAMMask[num]];
 }
 
@@ -567,7 +568,7 @@ u16* GPU::GetUniqueBankCBF(u32 mask, u32 offset)
     //mask &= 0xF;
     if (!mask || (mask & (mask - 1)) != 0) return nullptr;
     if (mask & 0x1F0) return nullptr;
-    int num = __builtin_ctz(mask);
+    int num = CountTrailingZeroes(mask);
     offset = (offset >> 1) & 0x3;
     return &VRAMCaptureBlockFlags[(num << 2) | offset];
 }
@@ -1153,7 +1154,9 @@ void GPU::StartHBlank(u32 line) noexcept
     {
         // draw
         // note: this should start 48 cycles after the scanline start
-        if (!SkipRender)
+        // Display capture writes emulated VRAM inside DrawScanline. It is not
+        // an optional presentation effect and must survive headless skipping.
+        if (!SkipRender || CaptureEnable)
         {
             if (line < 192)
                 Rend->DrawScanline(line);
@@ -1165,13 +1168,13 @@ void GPU::StartHBlank(u32 line) noexcept
     }
     else if (VCount == 215)
     {
-        if (!SkipRender)
-            Rend->Start3DRendering();
+        // The next frame can enable capture and consume this 3D result.
+        Rend->Start3DRendering();
     }
     else if (VCount == 262)
     {
         // sprites are pre-rendered one scanline in advance
-        if (!SkipRender)
+        if (!SkipRender || (CaptureCnt & (1u << 31)))
             Rend->DrawSprites(0);
     }
 
@@ -1416,7 +1419,7 @@ NonStupidBitField<Size/VRAMDirtyGranularity> VRAMTrackingSet<Size, MappingGranul
 
             while (mapping != 0)
             {
-                u32 num = __builtin_ctz(mapping);
+                u32 num = CountTrailingZeroes(mapping);
                 mapping &= ~(1 << num);
 
                 // hack for **speed**
@@ -1451,7 +1454,7 @@ NonStupidBitField<Size/VRAMDirtyGranularity> VRAMTrackingSet<Size, MappingGranul
 
     while (banksToBeZeroed != 0)
     {
-        u32 num = __builtin_ctz(banksToBeZeroed);
+        u32 num = CountTrailingZeroes(banksToBeZeroed);
         banksToBeZeroed &= ~(1 << num);
         gpu.VRAMDirty[num].Clear();
     }

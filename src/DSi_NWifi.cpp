@@ -1067,7 +1067,7 @@ void DSi_NWifi::WMI_Command()
 
         case 0x000E: // get channel list
             {
-                int nchan = 11; // TODO: customize??
+                constexpr int nchan = 11; // TODO: customize??
                 u8 reply[2 + (nchan*2) + 2];
 
                 reply[0] = 0;
