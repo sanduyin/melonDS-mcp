@@ -2,6 +2,8 @@
 
 状态：可用实现已完成本机验收，发布准备完成。更新日期：2026-09-05。
 
+2026-09-14增量：新增6个金手指研究/普通存档工具和仓库Agent技能，当前共68工具；新增实现、测试和特定游戏案例见 [普通存档工作流](../../mcp/docs/SAVE_WORKFLOWS.md)。本次整体回归273项Python、43项native、566次MCP调用通过，覆盖全部65个非Ghidra工具；3个可选Ghidra工具未重跑。下文表格保留2026-09-05的历史62工具基线。
+
 主线已改为 [sanduyin/melonDS-mcp](https://github.com/sanduyin/melonDS-mcp)
 的 `3b39290543904bbafe62ec5c4f208b69172212ec` 直连实现，并合入本机验证过的修复。
 上游基础为 `906e9ebb27da8c6a715cd7abab4abfe8a8d29427`。

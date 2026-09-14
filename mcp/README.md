@@ -2,7 +2,7 @@
 
 本目录复用 [sanduyin/melonDS-mcp](https://github.com/sanduyin/melonDS-mcp) 的
 `3b39290543904bbafe62ec5c4f208b69172212ec` 实现（GPLv3），保留原 48 个工具，
-新增 7 个 GPU 检查、3 个 Ghidra 分析和 4 个安全内存/代码工具，共 62 个 MCP 工具。
+新增 7 个 GPU 检查、3 个 Ghidra 分析、4 个安全内存/代码和6个金手指/普通存档工具，共68个 MCP 工具。
 原项目说明其 shim/FastMCP 设计参考了
 [MelonMCP](https://github.com/claudeopusworkspace/MelonMCP)。核心和 shim 的来源及改动保留在源码中。
 
@@ -68,6 +68,10 @@ ROM 使用你有权使用的本地文件，项目不提供商业 ROM 或 BIOS du
 
 ### 新增的检查工作流
 
+- 金手指与改存档：`save_workspace_prepare → load_rom → memory_scan / memory_table_read`
+  定位验证，再保护写入、游戏内保存、`backup_export`、独立核心冷启动验收。
+  `cheat_generate_ar` 只生成代码、不启用。[工具说明](docs/SAVE_WORKFLOWS.md)与
+  [Agent 技能](../.agents/skills/melonds-cheat-save/SKILL.md)记录了本次无限航路全图鉴经验。
 - 安全读写：数据使用 `memory_peek → memory_poke`；代码使用 `code_peek → code_patch`。
   写入可带 `expected_hex` 防止过期修改；数据视图跟随 TCM，代码视图忽略 DTCM，详见 API。
 - 看图形资源：`gpu_state → gpu_read_vram / gpu_palette / gpu_tiles / gpu_oam`，
@@ -78,7 +82,7 @@ ROM 使用你有权使用的本地文件，项目不提供商业 ROM 或 BIOS du
 
 ## 已实现与验证范围
 
-- 共 62 工具：原控制 17、调试 22、状态 9，加 GPU 7、安全内存/代码 4、分析 3；详见 [API.md](docs/API.md)。
+- 共68工具：原控制17、调试22、状态9，加GPU 7、安全内存/代码4、分析3、金手指/普通存档6；详见 [API.md](docs/API.md)。
 - 所有 MCP 工具共享可重入锁，限制输入范围，拒绝未知参数、隐式类型转换与地址溢出。
 - 推进帧默认全渲染；帧计数以 native `NumFrames` 变化为准，暂停/帧中断不凭调用次数计数。
 - PNG 截图返回标准 MCP `ImageContent`，另附屏幕尺寸、帧号、断点状态元数据。
@@ -87,6 +91,8 @@ ROM 使用你有权使用的本地文件，项目不提供商业 ROM 或 BIOS du
   运行：`mcp/.venv/Scripts/python.exe -m pytest mcp/python/tests -q`。
 
 ### 本机实际测试结果（2026-09-05）
+
+下表是原62工具的历史基线；2026-09-14新增工具测试与限制见 [SAVE_WORKFLOWS.md](docs/SAVE_WORKFLOWS.md)。
 
 环境：Windows x64、MSVC 19.44、Ninja、Release，DS 模式、软件渲染、JIT OFF。
 

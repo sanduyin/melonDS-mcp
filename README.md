@@ -22,12 +22,19 @@ The goal is to do things right and fast, akin to blargSNES (but hopefully better
 This workspace includes the headless MCP implementation based on
 [sanduyin/melonDS-mcp](https://github.com/sanduyin/melonDS-mcp), with Windows
 build fixes and native debugging regressions. Start with
-[the MCP build and usage guide](mcp/README.md). It exposes 62 tools over stdio
+[the MCP build and usage guide](mcp/README.md). It exposes 68 tools over stdio
 and loads the emulator core directly; no GUI or GDB server is required.
 This includes native debugging, side-effect-free memory inspection, guarded
 TCM-aware writes and coherent instruction patches, GPU tilemap/sprite images,
 and optional real Ghidra decompilation with bounded result caching. See the guide
 for the tested scope and remaining limitations.
+
+The [cheat and ordinary-save workflow](mcp/docs/SAVE_WORKFLOWS.md) adds isolated
+save backups, guarded strided-table edits, RAM searches, battery-save export and
+Action Replay text generation. The repository also includes a reusable
+[agent skill](.agents/skills/melonds-cheat-save/SKILL.md). Generated cheats are not
+automatically enabled; persistent save edits require an in-game save and an
+independent cold-boot check. No commercial ROMs or player saves are included.
 
 ## How to use
 

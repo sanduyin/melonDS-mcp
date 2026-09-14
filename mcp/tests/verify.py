@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 NATIVE = ("native_smoke", "native_graphics", "native_memory_peek",
           "native_memory_poke", "native_savestate_errors")
 WORKFLOWS = ("mcp_e2e", "graphics_e2e", "graphics_maps_e2e", "memory_poke_e2e",
-             "debug_workflow_e2e", "control_workflow_e2e")
+             "debug_workflow_e2e", "control_workflow_e2e", "save_workflows_e2e")
 ANALYSIS_TOOLS = {"analysis_status", "decompile_bytes", "decompile_memory"}
 
 

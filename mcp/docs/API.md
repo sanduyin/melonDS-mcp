@@ -1,6 +1,6 @@
 # melonDS-mcp API 文档
 
-本接口从 sanduyin/melonDS-mcp 的 commit `3b39290543904bbafe62ec5c4f208b69172212ec`（GPLv3）导入并修正，保留原 48 个工具，另有 GPU 7、安全内存/代码 4、真正反编译分析 3，共 62 个工具。接口覆盖与实现不等于跨平台真实 ROM 验收；当前验证范围见 [README](../README.md)。
+本接口从 sanduyin/melonDS-mcp 的 commit `3b39290543904bbafe62ec5c4f208b69172212ec`（GPLv3）导入并修正，保留原48个工具，另有GPU 7、安全内存/代码4、真正反编译分析3、金手指/普通存档6，共68个工具。新增的 `save_workspace_prepare`、`backup_export`、`memory_scan`、`memory_table_read`、`memory_table_patch`、`cheat_generate_ar` 参数与限制见 [普通存档工作流](SAVE_WORKFLOWS.md)。接口覆盖与实现不等于跨平台真实 ROM 验收；当前验证范围见 [README](../README.md)。
 
 ## 架构总览
 

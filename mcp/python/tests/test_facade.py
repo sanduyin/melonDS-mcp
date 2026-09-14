@@ -95,7 +95,7 @@ def call(server, name, arguments):
 def test_all_tools_registered_and_extra_forbidden(emu):
     server, _ = create_server(emu)
     tools = asyncio.run(server.list_tools())
-    assert len(tools) == 62
+    assert len(tools) == 68
     assert all(tool.inputSchema["additionalProperties"] is False for tool in tools)
     assert next(t for t in tools if t.name == "advance_frames").inputSchema["properties"]["frames"]["maximum"] == 3600
     analysis_schema = next(t for t in tools if t.name == "decompile_bytes").inputSchema["properties"]
