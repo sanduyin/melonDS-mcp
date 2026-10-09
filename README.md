@@ -17,6 +17,18 @@ DS emulator, sorta
 The goal is to do things right and fast, akin to blargSNES (but hopefully better). But also to, you know, have a fun challenge :)
 <hr>
 
+## Agent / MCP edition
+
+This workspace includes the headless MCP implementation based on
+[sanduyin/melonDS-mcp](https://github.com/sanduyin/melonDS-mcp), with Windows
+build fixes and native debugging regressions. Start with
+[the MCP build and usage guide](mcp/README.md). It exposes 62 tools over stdio
+and loads the emulator core directly; no GUI or GDB server is required.
+This includes native debugging, side-effect-free memory inspection, guarded
+TCM-aware writes and coherent instruction patches, GPU tilemap/sprite images,
+and optional real Ghidra decompilation with bounded result caching. See the guide
+for the tested scope and remaining limitations.
+
 ## How to use
 
 Firmware boot (not direct boot) requires a BIOS/firmware dump from an original DS or DS Lite.

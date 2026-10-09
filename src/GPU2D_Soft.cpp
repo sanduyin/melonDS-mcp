@@ -18,6 +18,7 @@
 
 #include "GPU_Soft.h"
 #include "GPU_ColorOp.h"
+#include <atomic>
 
 namespace melonDS
 {
@@ -386,7 +387,11 @@ template<bool mosaic>
 void SoftRenderer2D::DrawBG_Text(u32 line, u32 bgnum)
 {
     // workaround for backgrounds missing on aarch64 with lto build
+#if defined(_MSC_VER)
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+#else
     asm volatile ("" : : : "memory");
+#endif
 
     u16 bgcnt = GPU2D.BGCnt[bgnum];
 

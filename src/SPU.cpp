@@ -1028,8 +1028,10 @@ void SPU::BufferAudio()
     blip_end_frame(BlipRight, BlipTimer);
     BlipTimer = 0;
 
-    int avail = blip_samples_avail(BlipLeft);
-    s16 temp[avail * 2];
+    // Each blip buffer is created with a 512-sample capacity. Keep this
+    // temporary on the stack without relying on non-standard C++ VLAs.
+    int avail = std::min(blip_samples_avail(BlipLeft), 512);
+    s16 temp[512 * 2];
     blip_read_samples(BlipLeft, temp, avail, true);
     blip_read_samples(BlipRight, temp + 1, avail, true);
 

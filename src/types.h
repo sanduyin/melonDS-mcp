@@ -33,6 +33,66 @@ typedef int16_t     s16;
 typedef int32_t     s32;
 typedef int64_t     s64;
 
+// Keep the bit helpers available to every core compiler. melonDS historically
+// used GCC/Clang builtins directly in otherwise portable core code, which made
+// the interpreter-only build unnecessarily depend on those compilers.
+constexpr int CountSetBits(u32 value) noexcept
+{
+    int count = 0;
+    while (value)
+    {
+        value &= value - 1;
+        ++count;
+    }
+    return count;
+}
+
+constexpr int CountTrailingZeroes(u32 value) noexcept
+{
+    if (!value) return 32;
+
+    int count = 0;
+    while (!(value & 1))
+    {
+        value >>= 1;
+        ++count;
+    }
+    return count;
+}
+
+constexpr int CountTrailingZeroes(u64 value) noexcept
+{
+    if (!value) return 64;
+
+    int count = 0;
+    while (!(value & 1))
+    {
+        value >>= 1;
+        ++count;
+    }
+    return count;
+}
+
+constexpr int CountTrailingZeroes(u16 value) noexcept
+{
+    return CountTrailingZeroes(static_cast<u32>(value));
+}
+
+constexpr int CountTrailingZeroes(u8 value) noexcept
+{
+    return CountTrailingZeroes(static_cast<u32>(value));
+}
+
+constexpr int CountLeadingZeroes(u64 value) noexcept
+{
+    if (!value) return 64;
+
+    int count = 0;
+    for (u64 mask = 1ULL << 63; !(value & mask); mask >>= 1)
+        ++count;
+    return count;
+}
+
 template<class T, std::size_t A, std::size_t B>
 using array2d = std::array<std::array<T, B>, A>;
 

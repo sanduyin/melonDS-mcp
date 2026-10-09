@@ -1166,6 +1166,7 @@ void ARMv4::DataRead32(u32 addr, u32* val)
 
 void ARMv4::DataRead32S(u32 addr, u32* val)
 {
+    if (MCPDebug::DataHooksActive()) MCPDebug::DataReadHook(this, addr & ~3u, 4);
     addr &= ~3;
 
     *val = BusRead32(addr);
@@ -1202,6 +1203,7 @@ void ARMv4::DataWrite32(u32 addr, u32 val)
 
 void ARMv4::DataWrite32S(u32 addr, u32 val)
 {
+    if (MCPDebug::DataHooksActive()) MCPDebug::DataWriteHook(this, addr & ~3u, val, 4);
     addr &= ~3;
 
     BusWrite32(addr, val);

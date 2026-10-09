@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
-from .constants import buttons_to_bitmask, SCREEN_WIDTH, SCREEN_HEIGHT, VALID_BUTTONS
+from .constants import buttons_to_bitmask, SCREEN_WIDTH, SCREEN_HEIGHT, BUTTON_MAP
 from .emulator import EmulatorState
 
 
@@ -65,8 +66,10 @@ def register(mcp, emu: EmulatorState) -> None:
 
         emu.ensure_init()
         lib.melonds_input_keypad_update(mask)
-        result = emu.advance_frames(frames)
-        lib.melonds_input_keypad_update(0)
+        try:
+            result = emu.advance_frames(frames)
+        finally:
+            lib.melonds_input_keypad_update(0)
         result["buttons"] = buttons
         return result
 
@@ -88,7 +91,7 @@ def register(mcp, emu: EmulatorState) -> None:
     def get_buttons() -> dict:
         """查询当前按住的按键。"""
         mask = lib.melonds_input_keypad_get()
-        pressed = [name for name in VALID_BUTTONS if mask & (1 << VALID_BUTTONS.index(name))]
+        pressed = [name for name, bit in BUTTON_MAP.items() if mask & bit]
         return {"mask": mask, "pressed": pressed}
 
     @mcp.tool()
@@ -105,8 +108,10 @@ def register(mcp, emu: EmulatorState) -> None:
 
         emu.ensure_init()
         lib.melonds_input_set_touch_pos(x, y)
-        result = emu.advance_frames(frames)
-        lib.melonds_input_release_touch()
+        try:
+            result = emu.advance_frames(frames)
+        finally:
+            lib.melonds_input_release_touch()
         result["touch"] = {"x": x, "y": y}
         return result
 
@@ -132,7 +137,7 @@ def register(mcp, emu: EmulatorState) -> None:
 
     @mcp.tool()
     def advance_frames(frames: int = 1) -> dict:
-        """推进模拟指定帧数（跳过渲染以提速，用于等待游戏状态变化）。
+        """推进模拟指定帧数并渲染，后续截图可读取最近完成帧。
 
         Args:
             frames: 帧数（默认 1）
@@ -159,8 +164,6 @@ def register(mcp, emu: EmulatorState) -> None:
             max_frames: 最大推进帧数（默认 3600 ≈ 60 秒）
         """
         emu.ensure_init()
-        emu._sync_jit()
-        lib.melonds_set_skip_render(1)
 
         def read() -> int:
             if size == 1:
@@ -172,20 +175,20 @@ def register(mcp, emu: EmulatorState) -> None:
         frames_done = 0
         hit = False
         for _ in range(max_frames):
-            rc = emu._cycle()
-            frames_done += 1
-            if rc == 1:
-                hit = True
-                break
             if read() == expected:
                 break
-
-        lib.melonds_set_skip_render(0)
+            progress = emu.advance_frames(1)
+            frames_done += progress["frames_executed"]
+            hit = progress["break_hit"]
+            if hit or not progress["frames_executed"]:
+                break
+        final_value = read()
         return {
             "frames_executed": frames_done,
-            "final_value": read(),
-            "match": read() == expected and not hit,
+            "final_value": final_value,
+            "match": final_value == expected,
             "break_hit": hit,
+            "frame_number": emu._frame_count(),
         }
 
     @mcp.tool()
@@ -195,6 +198,15 @@ def register(mcp, emu: EmulatorState) -> None:
 
     # ── Savestate ──
 
+    def state_path(path: str, slot: int) -> str:
+        if slot > 0:
+            if not emu.rom_path:
+                raise ValueError("存档槽需要先加载 ROM")
+            return str(Path(emu.rom_path).with_suffix(f".slot{slot}.mst"))
+        if not path:
+            raise ValueError("需要 path 或 slot 参数")
+        return path
+
     @mcp.tool()
     def savestate_save(path: str = "", slot: int = -1) -> dict:
         """保存 savestate 到文件或 slot（二选一）。
@@ -203,26 +215,25 @@ def register(mcp, emu: EmulatorState) -> None:
             path: 文件路径（.mst）
             slot: slot 编号（1-9），基于 ROM 路径自动命名
         """
+        target = state_path(path, slot)
+        ok = lib.melonds_savestate_save(target.encode("utf-8"))
+        result = {"ok": bool(ok), "path": target}
         if slot > 0:
-            lib.melonds_savestate_slot_save(slot)
-            return {"ok": True, "slot": slot}
-        if not path:
-            return {"ok": False, "error": "需要 path 或 slot 参数"}
-        ok = lib.melonds_savestate_save(path.encode())
-        return {"ok": bool(ok), "path": path}
+            result["slot"] = slot
+        if not ok:
+            result["error"] = "savestate 保存失败"
+        return result
 
     @mcp.tool()
     def savestate_load(path: str = "", slot: int = -1) -> dict:
         """从文件或 slot 加载 savestate。"""
+        target = state_path(path, slot)
+        if not os.path.isfile(target):
+            return {"ok": False, "error": f"存档不存在: {target}"}
+        ok = lib.melonds_savestate_load(target.encode("utf-8"))
+        result = {"ok": bool(ok), "path": target}
         if slot > 0:
-            ok = lib.melonds_savestate_slot_exists(slot)
-            if not ok:
-                return {"ok": False, "error": f"slot {slot} 不存在"}
-            lib.melonds_savestate_slot_load(slot)
-            return {"ok": True, "slot": slot}
-        if not path:
-            return {"ok": False, "error": "需要 path 或 slot 参数"}
-        if not os.path.exists(path):
-            return {"ok": False, "error": f"文件不存在: {path}"}
-        ok = lib.melonds_savestate_load(path.encode())
-        return {"ok": bool(ok), "path": path}
+            result["slot"] = slot
+        if not ok:
+            result["error"] = "savestate 加载失败"
+        return result

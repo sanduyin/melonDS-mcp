@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "melonds": {
+      "command": "D:/melonDS-MCP/mcp/.venv/Scripts/python.exe",
+      "args": ["-m", "melonds_mcp"],
+      "env": {
+        "PYTHONPATH": "D:/melonDS-MCP/mcp/python",
+        "MELONDS_MCP_LIB": "D:/melonDS-MCP/build/mcp-direct/melonds_mcp.dll",
+        "GHIDRA_HOME": "D:/melonDS-MCP/build/analysis-tools/ghidra_12.1.3_PUBLIC",
+        "JAVA_HOME": "D:/melonDS-MCP/build/analysis-tools/jdk-21.0.12.1+1"
+      }
+    }
+  }
+}

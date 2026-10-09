@@ -36,9 +36,9 @@
 #include "FreeBIOS.h"
 #include "Args.h"
 #include "version.h"
+#include "MCPDebug.h"
 
 #include "DSi.h"
-#include "MCPDebug.h"
 #include "DSi_SPI_TSC.h"
 #include "DSi_NWifi.h"
 #include "DSi_Camera.h"
@@ -443,6 +443,13 @@ void NDS::Reset()
 
     RunningGame = false;
     LastSysClockCycles = 0;
+    NumFrames = 0;
+    NumLagFrames = 0;
+    MCPFrameInProgress = false;
+    MCPDisplayStarted = false;
+    MCPSlicePhase = 0;
+    MCPSliceTarget = 0;
+    MCPDebug::ResetRuntimeState();
 
     // BIOS files are now loaded by the frontend
 
@@ -613,6 +620,11 @@ void NDS::Stop(Platform::StopReason reason)
 
     Log(level, "Stopping emulated console (Reason: %s)\n", StopReasonName(reason));
     Running = false;
+    MCPFrameInProgress = false;
+    MCPDisplayStarted = false;
+    MCPSlicePhase = 0;
+    MCPSliceTarget = 0;
+    MCPDebug::ResetRuntimeState();
     Platform::SignalStop(reason, UserData);
     GPU.Stop();
     SPU.Stop();
@@ -757,9 +769,43 @@ bool NDS::DoSavestate(Savestate* file)
 
     DoSavestateExtra(file); // Handles DSi state if applicable
 
+    // The ordinary core state remains upstream-compatible. Only MCP snapshots
+    // taken inside RunFrame need this optional continuation record.
+    if (file->Saving || file->HasSection("MCPR"))
+    {
+        file->Section("MCPR");
+        u32 version = 2;
+        u32 savedCPU = static_cast<u32>(CurCPU);
+        file->Var32(&version);
+        file->Bool32(&MCPFrameInProgress);
+        file->Bool32(&MCPDisplayStarted);
+        file->Var32(&MCPSlicePhase);
+        file->Var64(&MCPSliceTarget);
+        file->Var16(&GPU.TotalScanlines);
+        if (version == 2)
+            file->Var32(&savedCPU);
+        if ((version != 1 && version != 2) || MCPSlicePhase > 3 || savedCPU > 1)
+            file->Error = true;
+        if (!file->Saving && !file->Error)
+            CurCPU = version == 2 ? static_cast<int>(savedCPU) : (MCPSlicePhase >= 2 ? 1 : 0);
+    }
+    else
+    {
+        MCPFrameInProgress = false;
+        MCPDisplayStarted = false;
+        MCPSlicePhase = 0;
+        MCPSliceTarget = 0;
+        CurCPU = 0;
+    }
+
     if (!file->Saving)
     {
         GPU.SetPowerCnt(PowerControl9);
+
+        if (!file->Error)
+        {
+            MCPDebug::ResetRuntimeState();
+        }
 
         SPU.SetPowerCnt(PowerControl7 & 0x0001);
         Wifi.SetPowerCnt(PowerControl7 & 0x0002);
@@ -928,18 +974,19 @@ u32 NDS::RunFrame()
 {
     Current = this;
 
-    FrameStartTimestamp = SysTimestamp;
-
-    GPU.TotalScanlines = 0;
-
-    LagFrameFlag = true;
-    bool runFrame = Running && !(CPUStop & CPUStop_Sleep);
+    if (MCPDebug::GetBreakInfo().Hit)
+        return 0;
+    if (!MCPFrameInProgress)
+    {
+        FrameStartTimestamp = SysTimestamp;
+        GPU.TotalScanlines = 0;
+        LagFrameFlag = true;
+        MCPFrameInProgress = true;
+        MCPDisplayStarted = false;
+        MCPSlicePhase = 0;
+    }
     while (Running)
     {
-        // MCP 调试：断点/观察点/单步命中后冻结模拟器，等待 AckBreak
-        if (MCPDebug::GetBreakInfo().Hit)
-            break;
-
         u64 frametarget = SysTimestamp + 560190;
 
         if (CPUStop & CPUStop_Sleep)
@@ -976,51 +1023,63 @@ u32 NDS::RunFrame()
                 ARM7.CheckGdbIncoming();
             }
 
-            if (!(CPUStop & CPUStop_Wakeup))
+            if (!MCPDisplayStarted)
             {
-                GPU.StartFrame();
+                if (!(CPUStop & CPUStop_Wakeup))
+                    GPU.StartFrame();
+                CPUStop &= ~CPUStop_Wakeup;
+                MCPDisplayStarted = true;
             }
-            CPUStop &= ~CPUStop_Wakeup;
 
-            while (Running && GPU.TotalScanlines==0 && !MCPDebug::GetBreakInfo().Hit)
+            while (Running && GPU.TotalScanlines==0)
             {
-                u64 target = NextTarget();
-                ARM9Target = target << ARM9ClockShift;
-                CurCPU = 0;
-
-                if (CPUStop & CPUStop_GXStall)
+                if (MCPSlicePhase == 0)
                 {
-                    // GXFIFO stall
-                    s32 cycles = GPU.GPU3D.CyclesToRunFor();
-
-                    ARM9Timestamp = std::min(ARM9Target, ARM9Timestamp+(cycles<<ARM9ClockShift));
+                    ARM9Target = NextTarget() << ARM9ClockShift;
+                    MCPSlicePhase = 1;
                 }
-                else if (CPUStop & CPUStop_DMA9)
+
+                if (MCPSlicePhase == 1)
                 {
-                    DMAs[0].Run();
-                    if (!(CPUStop & CPUStop_GXStall)) DMAs[1].Run();
-                    if (!(CPUStop & CPUStop_GXStall)) DMAs[2].Run();
-                    if (!(CPUStop & CPUStop_GXStall)) DMAs[3].Run();
-                    if (ConsoleType == 1)
+                    CurCPU = 0;
+                    if (CPUStop & CPUStop_GXStall)
                     {
-                        auto& dsi = dynamic_cast<melonDS::DSi&>(*this);
-                        dsi.RunNDMAs(0);
+                        s32 cycles = GPU.GPU3D.CyclesToRunFor();
+                        ARM9Timestamp = std::min(ARM9Target, ARM9Timestamp+(cycles<<ARM9ClockShift));
                     }
-                }
-                else
-                {
-                    ARM9.Execute<cpuMode>();
-                }
+                    else if (CPUStop & CPUStop_DMA9)
+                    {
+                        DMAs[0].Run();
+                        if (!(CPUStop & CPUStop_GXStall)) DMAs[1].Run();
+                        if (!(CPUStop & CPUStop_GXStall)) DMAs[2].Run();
+                        if (!(CPUStop & CPUStop_GXStall)) DMAs[3].Run();
+                        if (ConsoleType == 1)
+                        {
+                            auto& dsi = dynamic_cast<melonDS::DSi&>(*this);
+                            dsi.RunNDMAs(0);
+                        }
+                    }
+                    else
+                    {
+                        ARM9.Execute<cpuMode>();
+                    }
+                    if (MCPDebug::GetBreakInfo().Hit)
+                        return 0;
 
-                RunTimers(0);
-                GPU.GPU3D.Run();
-
-                target = ARM9Timestamp >> ARM9ClockShift;
+                    RunTimers(0);
+                    GPU.GPU3D.Run();
+                    MCPSliceTarget = ARM9Timestamp >> ARM9ClockShift;
+                    MCPSlicePhase = 2;
+                }
                 CurCPU = 1;
 
-                while (ARM7Timestamp < target)
+                while (MCPSlicePhase == 3 || ARM7Timestamp < MCPSliceTarget)
                 {
-                    ARM7Target = target; // might be changed by a reschedule
+                    if (MCPSlicePhase == 2)
+                    {
+                        ARM7Target = MCPSliceTarget; // may be shortened by a reschedule
+                        MCPSlicePhase = 3;
+                    }
 
                     if (CPUStop & CPUStop_DMA7)
                     {
@@ -1039,13 +1098,18 @@ u32 NDS::RunFrame()
                         ARM7.Execute<cpuMode>();
                     }
 
+                    if (MCPDebug::GetBreakInfo().Hit)
+                        return 0;
                     RunTimers(1);
+                    MCPSlicePhase = 2;
                 }
 
-                RunSystem(target);
+                RunSystem(MCPSliceTarget);
+                MCPSlicePhase = 0;
 
                 if (CPUStop & CPUStop_Sleep)
                 {
+                    MCPDisplayStarted = false;
                     break;
                 }
             }
@@ -1072,6 +1136,9 @@ u32 NDS::RunFrame()
     NumFrames++;
     if (LagFrameFlag)
         NumLagFrames++;
+    MCPFrameInProgress = false;
+    MCPDisplayStarted = false;
+    MCPSlicePhase = 0;
 
     if (Running)
         return GPU.TotalScanlines;
@@ -1081,6 +1148,10 @@ u32 NDS::RunFrame()
 
 u32 NDS::RunFrame()
 {
+    // MCP hooks live in the interpreter. Do not depend on a Python-side JIT
+    // toggle occurring before a step request or lose the very first step.
+    if (MCPDebug::AnyHooksActive())
+        return RunFrame<CPUExecuteMode::Interpreter>();
 #ifdef JIT_ENABLED
     if (EnableJIT)
         return RunFrame<CPUExecuteMode::JIT>();

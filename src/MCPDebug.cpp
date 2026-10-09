@@ -5,6 +5,8 @@
     汇聚点检查，命中后记录事件并在下一条指令边界安全暂停。
 
     Copyright (C) 2026 melonDS-mcp contributors
+    Adapted from https://github.com/sanduyin/melonDS-mcp
+    (commit 3b39290543904bbafe62ec5c4f208b69172212ec).
     Licensed under GPLv3 (same as melonDS)
 */
 
@@ -48,6 +50,10 @@ static u32 WatchEventCount_ = 0;
 // 挂起断点（数据观察点命中，等待指令边界）
 static bool PendingBreak = false;
 static BreakInfo CurrentBreak = {};
+static bool ResumeBreakpoint = false;
+static u32 ResumeCPU = 0;
+static u32 ResumePC = 0;
+static u32 InstructionPC[2] = {};
 
 // ── 热路径 ──
 
@@ -55,7 +61,8 @@ bool AnyHooksActive()
 {
     // 注意：观察点命中产生的挂起断点必须经由指令边界钩子触发暂停，
     // 因此存在观察点时指令钩子也需保持激活。
-    return AnyBreakpoints || StepArmed || TraceOn || AnyWatchpoints || PendingBreak;
+    return AnyBreakpoints || StepArmed || TraceOn || AnyWatchpoints
+        || PendingBreak || CurrentBreak.Hit || ResumeBreakpoint;
 }
 
 bool DataHooksActive()
@@ -71,8 +78,20 @@ static inline u32 RealPC(ARM* cpu)
 
 bool InstructionHook(ARM* cpu)
 {
+    // A hit is sticky for both CPUs until the control layer acknowledges it.
+    // In particular an ARM7 return must never resume it in the catch-up loop.
+    if (CurrentBreak.Hit)
+        return true;
+
     u32 cpunum = cpu->Num; // 0=ARM9 1=ARM7
     u32 pc = RealPC(cpu);
+    InstructionPC[cpunum] = pc;
+    bool skipBreakpoint = false;
+    if (ResumeBreakpoint && ResumeCPU == cpunum)
+    {
+        skipBreakpoint = ResumePC == pc;
+        ResumeBreakpoint = false;
+    }
 
     // 1) 追踪（先记录，再判断断点，保证断点指令本身也被追踪到）
     if (TraceOn && (TraceCPUMask & (1 << cpunum))
@@ -100,7 +119,7 @@ bool InstructionHook(ARM* cpu)
     }
 
     // 3) 断点匹配
-    if (AnyBreakpoints)
+    if (AnyBreakpoints && !skipBreakpoint)
     {
         for (const Breakpoint& bp : Breakpoints)
         {
@@ -158,25 +177,31 @@ static void RecordWatchEvent(u32 cpu, u32 addr, u32 pc, u8 kind, u8 size, u32 va
 
 static void DataHook(ARM* cpu, u32 addr, u32 value, int size, bool write)
 {
+    if (size <= 0) return;
     u32 cpunum = cpu->Num;
+    const u64 accessEnd = (u64)addr + (u32)size - 1;
 
     for (const Watchpoint& wp : Watchpoints)
     {
         if (!wp.Enabled || wp.CPU != cpunum) continue;
-        if (addr < wp.AddrStart || addr > wp.AddrEnd) continue;
+        if (accessEnd < wp.AddrStart || addr > wp.AddrEnd) continue;
         if (!(wp.Kind & (write ? WatchWrite : WatchRead))) continue;
 
-        RecordWatchEvent(cpunum, addr, RealPC(cpu),
+        RecordWatchEvent(cpunum, addr, InstructionPC[cpunum],
                          write ? WatchWrite : WatchRead, (u8)size, value);
 
         // 置挂起标志，在下一条指令边界安全暂停
-        PendingBreak = true;
-        CurrentBreak.Hit = true;
-        CurrentBreak.CPU = cpunum;
-        CurrentBreak.PC = RealPC(cpu);
-        CurrentBreak.Reason = BreakWatchpoint;
-        CurrentBreak.Addr = addr;
-        CurrentBreak.ID = wp.ID;
+        if (!CurrentBreak.Hit)
+        {
+            PendingBreak = true;
+            CurrentBreak.Hit = true;
+            CurrentBreak.CPU = cpunum;
+            CurrentBreak.PC = InstructionPC[cpunum];
+            CurrentBreak.Reason = BreakWatchpoint;
+            CurrentBreak.Addr = addr;
+            CurrentBreak.ID = wp.ID;
+            StepArmed = false;
+        }
         return; // 一个访问只报告一次
     }
 }
@@ -199,6 +224,8 @@ void ResetRuntimeState()
     StepRemaining = 0;
     PendingBreak = false;
     CurrentBreak = {};
+    ResumeBreakpoint = false;
+    InstructionPC[0] = InstructionPC[1] = 0;
     TraceOn = false;
     TraceHead = 0;
     TraceCount_ = 0;
@@ -271,8 +298,8 @@ std::vector<Breakpoint> GetBreakpoints() { return Breakpoints; }
 int AddWatchpoint(u32 cpu, u32 addr, u32 size, u8 kind)
 {
     if (cpu > 1) return -1;
-    if (size == 0) size = 1;
-    if ((kind & WatchRW) == 0) kind = WatchRW;
+    if (size == 0 || (u64)addr + size > 0x100000000ULL) return -1;
+    if ((kind & WatchRW) == 0 || (kind & ~WatchRW) != 0) return -1;
 
     // 与现有观察点重叠视为重复
     u32 end = addr + size - 1;
@@ -340,6 +367,7 @@ std::vector<Watchpoint> GetWatchpoints() { return Watchpoints; }
 void RequestStep(u32 cpu, u32 count)
 {
     if (cpu > 1 || count == 0) return;
+    AckBreak();
     StepArmed = true;
     StepCPU = cpu;
     StepRemaining = count; // 放行 count 条指令，随后在指令边界暂停
@@ -367,22 +395,20 @@ u32 DrainTrace(TraceEntry* out, u32 max)
 {
     u32 n = std::min(max, TraceCount_);
     // 环形缓冲：从最旧条目开始拷贝
-    u32 oldest = (TraceCount_ == TraceBufferSize) ? TraceHead : 0;
+    u32 oldest = (TraceHead + TraceBufferSize - TraceCount_) % TraceBufferSize;
     for (u32 i = 0; i < n; i++)
         out[i] = TraceBuf[(oldest + i) % TraceBufferSize];
-    TraceHead = 0;
-    TraceCount_ = 0;
+    TraceCount_ -= n;
     return n;
 }
 
 u32 DrainWatchEvents(WatchEvent* out, u32 max)
 {
     u32 n = std::min(max, WatchEventCount_);
-    u32 oldest = (WatchEventCount_ == WatchEventBufferSize) ? WatchEventHead : 0;
+    u32 oldest = (WatchEventHead + WatchEventBufferSize - WatchEventCount_) % WatchEventBufferSize;
     for (u32 i = 0; i < n; i++)
         out[i] = WatchEventBuf[(oldest + i) % WatchEventBufferSize];
-    WatchEventHead = 0;
-    WatchEventCount_ = 0;
+    WatchEventCount_ -= n;
     return n;
 }
 
@@ -390,6 +416,12 @@ BreakInfo GetBreakInfo() { return CurrentBreak; }
 
 void AckBreak()
 {
+    if (CurrentBreak.Hit && CurrentBreak.Reason == BreakBreakpoint)
+    {
+        ResumeBreakpoint = true;
+        ResumeCPU = CurrentBreak.CPU;
+        ResumePC = CurrentBreak.PC;
+    }
     CurrentBreak = {};
     PendingBreak = false;
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import struct
+import hashlib
 
 from .constants import (
     CPU_ARM9, CPU_ARM7, BREAK_REASON, WATCH_READ, WATCH_WRITE, WATCH_RW,
@@ -147,6 +148,8 @@ def register(mcp, emu: EmulatorState) -> None:
             "sp": regs[13],
             "lr": regs[14],
             "pc": regs[15],
+            "instruction_address": (regs[15] - (2 if regs[16] & 0x20 else 4)) & 0xFFFFFFFF,
+            "pc_semantics": "pc is raw pipeline R15; instruction_address is the next instruction",
             "cpsr": _decode_cpsr(regs[16]),
             "cycles": regs[17],
             "halted": regs[18],
@@ -192,7 +195,7 @@ def register(mcp, emu: EmulatorState) -> None:
 
     @mcp.tool()
     def get_pc(cpu: int = 0) -> dict:
-        """获取指定 CPU 当前 PC。"""
+        """获取指定 CPU 下一待执行指令地址，与断点/trace 地址一致（read_registers.pc 是原始流水线 R15）。"""
         return {"cpu": cpu, "pc": lib.melonds_get_pc(cpu)}
 
     # ═══════════════ 反汇编 ═══════════════
@@ -200,7 +203,7 @@ def register(mcp, emu: EmulatorState) -> None:
     @mcp.tool()
     def disassemble(address: int, count: int = 10, cpu: int = 0,
                     thumb: bool | None = None) -> dict:
-        """反汇编指定地址处的指令（需安装 capstone）。
+        """反汇编安全指令 backing（含 ARM9 ITCM，排除 DTCM；需安装 capstone）。
 
         Args:
             address: 起始地址
@@ -216,8 +219,11 @@ def register(mcp, emu: EmulatorState) -> None:
             regs = emu.lib.get_registers(cpu)
             thumb = bool(regs[16] & 0x20)
 
-        # 每条指令最大 4 字节，多读一些以覆盖
-        data = emu.lib.read_block(cpu, address, count * 4 + 4)
+        if address % (2 if thumb else 4):
+            raise ValueError("反汇编地址必须按 ARM 4 字节 / Thumb 2 字节对齐")
+        # ARM and long Thumb instructions are at most four bytes. Never use
+        # bus reads here: they omit ITCM and may consume MMIO/device state.
+        data = emu.lib.code_peek_block(cpu, address, count * 4)
 
         md = capstone.Cs(capstone.CS_ARCH_ARM,
                          capstone.CS_MODE_THUMB if thumb else capstone.CS_MODE_ARM)
@@ -233,7 +239,9 @@ def register(mcp, emu: EmulatorState) -> None:
                 break
 
         return {"ok": True, "address": address, "cpu": cpu, "thumb": thumb,
-                "instructions": instructions}
+                "instructions": instructions, "byte_length": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "access": "debug_peek_instruction_backing"}
 
     # ═══════════════ 断点 ═══════════════
 

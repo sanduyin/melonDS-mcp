@@ -4,6 +4,8 @@ obj
 *.depend
 *.layout
 *.o
+*.obj
+*.pdb
 melon_grc.c
 melon_grc.h
 melon.rc
@@ -26,7 +28,11 @@ freebios/FreeBIOS_Data.h
 freebios/bios*
 freebios/build/
 
-# Python (MCP server)
+# Python tooling used by the standalone MCP facade
+*.py[cod]
 __pycache__/
-*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
 .venv/

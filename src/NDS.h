@@ -260,7 +260,7 @@ public: // TODO: Encapsulate the rest of these members
     void* UserData;
 
     int ConsoleType;
-    int CurCPU;
+    int CurCPU = 0;
 
     SchedEvent SchedList[Event_MAX] {};
     u8 ARM9MemTimings[0x40000][8];
@@ -268,9 +268,9 @@ public: // TODO: Encapsulate the rest of these members
     u8 ARM7MemTimings[0x20000][4];
     u32 ARM7Regions[0x20000];
 
-    u32 NumFrames;
-    u32 NumLagFrames;
-    bool LagFrameFlag;
+    u32 NumFrames = 0;
+    u32 NumLagFrames = 0;
+    bool LagFrameFlag = true;
 
     // no need to worry about those overflowing, they can keep going for atleast 4350 years
     u64 ARM9Timestamp, ARM9Target;
@@ -531,10 +531,16 @@ protected:
     alignas(u64) u32 SqrtVal[2];
     u32 SqrtRes;
     u16 KeyCnt[2];
-    bool Running;
+    bool Running = false;
     bool RunningGame;
     u64 LastSysClockCycles;
     u64 FrameStartTimestamp;
+    // A debugger may return from RunFrame in the middle of either CPU slice.
+    // Keep the pending phase so resume cannot restart LCD line 0 or replay ARM9.
+    bool MCPFrameInProgress = false;
+    bool MCPDisplayStarted = false;
+    u32 MCPSlicePhase = 0; // 0=new slice, 1=ARM9, 2=ARM7 setup, 3=ARM7 execute
+    u64 MCPSliceTarget = 0;
     u64 NextTarget();
     u64 NextTargetSleep();
     void CheckKeyIRQ(u32 cpu, u32 oldkey, u32 newkey);

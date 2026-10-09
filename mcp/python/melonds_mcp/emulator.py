@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+import threading
 from dataclasses import dataclass, field
 
 from .libmelonds import LibMelonDS
@@ -39,6 +40,9 @@ class EmulatorState:
     """
 
     def __init__(self):
+        # All MCP tool calls share this reentrant lock, including reads. Native
+        # calls release the GIL; a GIL alone is not a serialization boundary.
+        self.lock = threading.RLock()
         self.lib = LibMelonDS()
         self._initialized = False
         self._rom_path: str | None = None
@@ -117,28 +121,37 @@ class EmulatorState:
         """推进一帧，返回 1 表示触发调试暂停。"""
         return self.lib.lib.melonds_cycle()
 
-    def advance_frames(self, n: int, skip_render: bool = True) -> dict:
+    def _frame_count(self) -> int:
+        return self.lib.get_status()[1]
+
+    def advance_frames(self, n: int, skip_render: bool = False) -> dict:
         """推进 n 帧，统计帧率。返回运行摘要（含断点命中信息）。"""
         self.ensure_init()
         self._sync_jit()
         lib = self.lib.lib
 
-        if skip_render:
-            lib.melonds_set_skip_render(1)
+        # Rendering is on by default, so screenshots observe the last completed
+        # frame. Mid-frame debugger stops are reported without inventing a frame.
+        lib.melonds_set_skip_render(1 if skip_render else 0)
 
         t0 = time.perf_counter()
         frames_done = 0
         break_hit = False
-        for _ in range(n):
-            rc = self._cycle()
-            frames_done += 1
-            if rc == 1:
-                break_hit = True
-                break
+        try:
+            for _ in range(n):
+                before = self._frame_count()
+                rc = self._cycle()
+                advanced = (self._frame_count() - before) & 0xFFFFFFFF
+                frames_done += advanced
+                if rc == 1:
+                    break_hit = True
+                    break
+                if advanced == 0:
+                    break
+        finally:
+            lib.melonds_set_skip_render(0)
 
         elapsed = time.perf_counter() - t0
-        if skip_render:
-            lib.melonds_set_skip_render(0)
 
         # 帧率滚动窗口（1 秒）
         now = time.perf_counter()
@@ -159,6 +172,8 @@ class EmulatorState:
             "frames_requested": n,
             "elapsed_seconds": round(elapsed, 4),
             "break_hit": break_hit,
+            "frame_number": self._frame_count(),
+            "running": self.is_running(),
         }
         if break_hit:
             result["break_info"] = self.lib.break_info()
@@ -166,54 +181,41 @@ class EmulatorState:
 
     def run_until_break(self, max_frames: int = 3600) -> dict:
         """持续推进直到断点/观察点/单步命中或达到帧上限。"""
-        self.ensure_init()
-        self._sync_jit()
-        lib = self.lib.lib
-        lib.melonds_set_skip_render(1)
-
-        t0 = time.perf_counter()
-        frames_done = 0
-        hit = False
-        for _ in range(max_frames):
-            rc = self._cycle()
-            frames_done += 1
-            if rc == 1:
-                hit = True
-                break
-        lib.melonds_set_skip_render(0)
-
-        return {
-            "frames_executed": frames_done,
-            "max_frames": max_frames,
-            "elapsed_seconds": round(time.perf_counter() - t0, 4),
-            "break_hit": hit,
-            "break_info": self.lib.break_info() if hit else None,
-        }
+        result = self.advance_frames(max_frames)
+        result["max_frames"] = max_frames
+        result.setdefault("break_info", None)
+        return result
 
     def step(self, cpu: int, count: int) -> dict:
         """单步执行：请求执行 count 条指令后暂停，返回命中信息。"""
         self.ensure_init()
-        self._sync_jit()
         lib = self.lib.lib
 
         lib.melonds_debug_step_request(cpu, count)
+        self._sync_jit()
+        lib.melonds_set_skip_render(0)
 
         # 持续推进直到命中（最多推进若干帧避免死循环）
         frames = 0
         hit = False
-        while frames < 600:
+        for _ in range(600):
+            before = self._frame_count()
             rc = self._cycle()
-            frames += 1
+            advanced = (self._frame_count() - before) & 0xFFFFFFFF
+            frames += advanced
             if rc == 1:
                 hit = True
                 break
             if not lib.melonds_debug_step_pending():
                 # 步进目标已达成但未在本帧内触发（例如 CPU 停机）
                 break
+            if advanced == 0:
+                break
 
         return {
             "cpu": cpu,
             "instructions": count,
+            "instructions_requested": count,
             "frames_executed": frames,
             "hit": hit,
             "break_info": self.lib.break_info() if hit else None,
@@ -295,6 +297,7 @@ class EmulatorState:
         self.ensure_init()
         lib = self.lib.lib
         st = self.lib.get_status()
+        cycles = lib.melonds_get_cycles(0)
 
         summary = {
             "running": bool(st[0]),
@@ -307,7 +310,9 @@ class EmulatorState:
             "pc_arm7": st[7],
             "fps": round(self.fps, 2),
             "emulation_speed": round(self.emulation_speed, 2),
-            "cycles_arm7": lib.melonds_get_cycles(1),
+            "system_clock_cycles": cycles,
+            "cycles_arm7": cycles,
+            "cycle_semantics": "system clock; cycles_arm7 is a compatibility alias",
             "rom": self.lib.rom_info(),
             "rom_path": self._rom_path,
             "debug": {

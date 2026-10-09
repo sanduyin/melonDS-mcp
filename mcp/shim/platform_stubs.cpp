@@ -6,6 +6,7 @@
  *
  * Copyright (C) 2026 melonDS-mcp contributors
  * Licensed under GPLv3 (same as melonDS)
+ * Source: https://github.com/sanduyin/melonDS-mcp
  */
 
 #include <cstdio>
@@ -19,8 +20,11 @@
 #include <filesystem>
 #include <fstream>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
-#include <unistd.h>
+#endif
 
 #include "Platform.h"
 #include "SPI_Firmware.h"
@@ -33,6 +37,17 @@ static auto g_start_time = std::chrono::steady_clock::now();
 
 namespace melonDS::Platform
 {
+
+static FILE* OpenNativeFile(const std::string& path, const char* mode)
+{
+#ifdef _WIN32
+    const auto nativePath = std::filesystem::u8path(path).native();
+    const std::wstring nativeMode(mode, mode + std::strlen(mode));
+    return _wfopen(nativePath.c_str(), nativeMode.c_str());
+#else
+    return fopen(path.c_str(), mode);
+#endif
+}
 
 // ═══════════════════════════════════════════
 // 停止信号
@@ -64,7 +79,8 @@ static std::string GetModeString(FileMode mode, bool file_exists)
     else
         m += 'w';
 
-    if ((mode & FileMode::ReadWrite) == FileMode::ReadWrite)
+    if ((mode & FileMode::ReadWrite) == FileMode::ReadWrite ||
+        ((mode & FileMode::Write) && m == "r"))
         m += '+';
 
     if (!(mode & FileMode::Text))
@@ -83,10 +99,12 @@ FileHandle* OpenFile(const std::string& path, FileMode mode)
     if ((mode & (FileMode::ReadWrite | FileMode::Append)) == FileMode::None)
         return nullptr;
 
-    bool exists = std::filesystem::exists(path);
+    std::error_code error;
+    bool exists = std::filesystem::exists(std::filesystem::u8path(path), error);
+    if (error || ((mode & FileMode::NoCreate) && !exists)) return nullptr;
     std::string mstr = GetModeString(mode, exists);
 
-    FILE* f = fopen(path.c_str(), mstr.c_str());
+    FILE* f = OpenNativeFile(path, mstr.c_str());
     return reinterpret_cast<FileHandle*>(f);
 }
 
@@ -97,7 +115,8 @@ FileHandle* OpenLocalFile(const std::string& path, FileMode mode)
 
 bool FileExists(const std::string& name)
 {
-    return std::filesystem::exists(name);
+    std::error_code error;
+    return std::filesystem::exists(std::filesystem::u8path(name), error) && !error;
 }
 
 bool LocalFileExists(const std::string& name)
@@ -107,7 +126,7 @@ bool LocalFileExists(const std::string& name)
 
 bool CheckFileWritable(const std::string& filepath)
 {
-    FILE* f = fopen(filepath.c_str(), "ab");
+    FILE* f = OpenNativeFile(filepath, "ab");
     if (f) { fclose(f); return true; }
     return false;
 }
@@ -134,7 +153,11 @@ bool FileReadLine(char* str, int count, FileHandle* file)
 
 u64 FilePosition(FileHandle* file)
 {
-    return (u64)ftell(reinterpret_cast<FILE*>(file));
+#ifdef _WIN32
+    return static_cast<u64>(_ftelli64(reinterpret_cast<FILE*>(file)));
+#else
+    return static_cast<u64>(ftello(reinterpret_cast<FILE*>(file)));
+#endif
 }
 
 bool FileSeek(FileHandle* file, s64 offset, FileSeekOrigin origin)
@@ -146,7 +169,11 @@ bool FileSeek(FileHandle* file, s64 offset, FileSeekOrigin origin)
         case FileSeekOrigin::End:     whence = SEEK_END; break;
         default:                      whence = SEEK_SET; break;
     }
-    return fseek(reinterpret_cast<FILE*>(file), offset, whence) == 0;
+#ifdef _WIN32
+    return _fseeki64(reinterpret_cast<FILE*>(file), offset, whence) == 0;
+#else
+    return fseeko(reinterpret_cast<FILE*>(file), static_cast<off_t>(offset), whence) == 0;
+#endif
 }
 
 void FileRewind(FileHandle* file)
@@ -181,12 +208,11 @@ u64 FileWriteFormatted(FileHandle* file, const char* fmt, ...)
 
 u64 FileLength(FileHandle* file)
 {
-    FILE* f = reinterpret_cast<FILE*>(file);
-    long pos = ftell(f);
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, pos, SEEK_SET);
-    return (u64)len;
+    const u64 pos = FilePosition(file);
+    if (!FileSeek(file, 0, FileSeekOrigin::End)) return 0;
+    const u64 len = FilePosition(file);
+    if (!FileSeek(file, static_cast<s64>(pos), FileSeekOrigin::Start)) return 0;
+    return len;
 }
 
 // ═══════════════════════════════════════════
@@ -350,7 +376,7 @@ void WriteNDSSave(const u8* savedata, u32 savelen, u32 writeoffset, u32 writelen
 
     if (g_save_path.empty() || !savedata || savelen == 0) return;
 
-    FILE* f = fopen(g_save_path.c_str(), "wb");
+    FILE* f = OpenNativeFile(g_save_path, "wb");
     if (f) {
         fwrite(savedata, 1, savelen, f);
         fclose(f);
@@ -450,19 +476,34 @@ float Addon_MotionQuery(MotionQueryType type, void* userdata)
 
 DynamicLibrary* DynamicLibrary_Load(const char* lib)
 {
+#ifdef _WIN32
+    if (!lib) return nullptr;
+    const auto nativePath = std::filesystem::u8path(lib).native();
+    const HMODULE handle = LoadLibraryW(nativePath.c_str());
+#else
     void* handle = dlopen(lib, RTLD_LAZY);
+#endif
     return reinterpret_cast<DynamicLibrary*>(handle);
 }
 
 void DynamicLibrary_Unload(DynamicLibrary* lib)
 {
-    if (lib) dlclose(reinterpret_cast<void*>(lib));
+    if (!lib) return;
+#ifdef _WIN32
+    FreeLibrary(reinterpret_cast<HMODULE>(lib));
+#else
+    dlclose(reinterpret_cast<void*>(lib));
+#endif
 }
 
 void* DynamicLibrary_LoadFunction(DynamicLibrary* lib, const char* name)
 {
     if (!lib) return nullptr;
+#ifdef _WIN32
+    return reinterpret_cast<void*>(GetProcAddress(reinterpret_cast<HMODULE>(lib), name));
+#else
     return dlsym(reinterpret_cast<void*>(lib), name);
+#endif
 }
 
 } // namespace melonDS::Platform

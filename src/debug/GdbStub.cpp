@@ -160,6 +160,16 @@ void GdbStub::Disconnect()
 {
 	if (ConnFd > 0) closesocket(ConnFd);
 	ConnFd = 0;
+
+	// Breakpoints and watchpoints belong to the debugger connection that
+	// installed them. Keeping them across a disconnect can make the emulation
+	// thread enter a blocking debug stop with no client left to release it.
+	DelAllBpWp();
+	Stat = TgtStatus::None;
+	StatFlag = false;
+	NoAck = false;
+	RecvBufferFilled = 0;
+	Cmdlen = 0;
 }
 
 GdbStub::~GdbStub()
